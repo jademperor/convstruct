@@ -1,12 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"errors"
 	"flag"
 	"fmt"
 	"go/ast"
+	"go/format"
 	"io"
-	"log"
 	"os"
 	"text/template"
 
@@ -29,9 +30,15 @@ func main() {
 		flagStructName = flag.String("structName", "", "StructName to be parsed")
 		flagOut        = flag.String("out", "", "Filename to keep result")
 		flagPkgName    = flag.String("outPkgName", "", "Pkg name to output, only will be used when output file is not exist")
+		flagDebug      = flag.Bool("debug", false, "open debug mode")
 	)
 
 	flag.Parse()
+
+	if *flagDebug == false {
+		// true: debug == false
+		pkg.CloseDebug()
+	}
 
 	c := &config{
 		inputPkgDir:      *flagIn,
@@ -52,6 +59,7 @@ func main() {
 		panic(err)
 	}
 
+	pkg.DebugF("generated struct: %v, %v", genStruct.GenStruct, genStruct.FromPkg)
 	if err := c.generate(genStruct); err != nil {
 		panic(err)
 	}
@@ -68,42 +76,59 @@ type config struct {
 	imports                   map[string]*pkg.GenImport
 	inPkg                     *pkg.Package
 	outPkg                    *pkg.Package
-	w                         io.WriteCloser
+	w                         io.ReadWriteCloser
 }
 
 func (c *config) valid() bool {
+	if c.targetStructName == "" {
+		fmt.Println("empty target struct name")
+		return false
+	}
+
+	if c.outputFile == "" {
+		c.outputFile = "out.go"
+	}
+
+	if c.inputPkgDir == "" {
+		fmt.Println("empty input package dir")
+		return false
+	}
+
+	// if c.outPkgName == "" {
+	// }
+
 	return true
 }
 
+// parse .
+// parse input package and output file
 func (c *config) parse() (err error) {
 	if !c.valid() {
 		return errors.New("invalid config")
 	}
 
-	filenames := fs.ListFiles("./testdata", fs.IgnoreDirFilter())
+	filenames := fs.ListFiles(c.inputPkgDir, fs.IgnoreDirFilter())
 	if c.inPkg, err = pkg.ParsePkg(c.inputPkgDir, filenames); err != nil {
 		return err
 	}
 
 	if _, err := os.Stat(c.outputFile); os.IsNotExist(err) {
-		// generate file
-		if c.w, err = os.Create(c.outputFile); err != nil {
-			return err
-		}
 		c.flagOutputFileBeGenerated = true
 	} else {
 		if c.outPkg, err = pkg.ParseFile(c.outputFile); err != nil {
 			return err
 		}
-		if c.w, err = os.Open(c.outputFile); err != nil {
-			return err
-		}
 		c.flagOutputFileBeGenerated = false
 	}
 
-	return nil
+	c.w, err = os.OpenFile(c.outputFile,
+		os.O_APPEND|os.O_CREATE|os.O_RDWR, os.ModePerm)
+
+	return err
 }
 
+// process to
+// select the target struct which is wanted to generate from
 func (c *config) process() (*genConvStruct, error) {
 	tarStruct := c.selectStruct()
 	if tarStruct == nil {
@@ -122,6 +147,7 @@ func (c *config) process() (*genConvStruct, error) {
 		},
 	}
 
+	// process all fields in target struct
 	for _, field := range tarStruct.Fields.List {
 		genStruct.Fields = append(genStruct.Fields, c.processField(field))
 	}
@@ -150,10 +176,11 @@ func (c *config) processField(f *ast.Field) *pkg.GenField {
 	}
 
 	// anonymous field
-	if f.Names == nil {
+	if f.Names == nil && fieldName != "" {
 		ident, ok := f.Type.(*ast.Ident)
 		if !ok {
-			pkg.DebugF("[DEBUG] could not convert Type(%v) to ast.Ident", f.Type)
+			// t := f.Type.(type)
+			pkg.DebugF("[processField] could not convert Type(%T) to ast.Ident", f.Type)
 		}
 
 		fieldName = ident.Name
@@ -166,47 +193,58 @@ func (c *config) processField(f *ast.Field) *pkg.GenField {
 }
 
 func (c *config) generate(genStruct *genConvStruct) error {
+	// byts, _ := ioutil.ReadAll(c.w)
+	buf := bytes.NewBuffer(nil)
+
 	if c.flagOutputFileBeGenerated {
-		// true: 新的文件
+		// true: output file not exist
 		tmpl := template.Must(
 			template.New("header").Parse(TmplHeader))
 
-		type genPkgHeader struct {
+		type genPkgHeaderWrap struct {
 			PkgName string
 		}
 
-		if err := tmpl.Execute(c.w, genPkgHeader{PkgName: c.outPkgName}); err != nil {
-			log.Fatal(err)
+		if err := tmpl.Execute(buf, genPkgHeaderWrap{PkgName: c.outPkgName}); err != nil {
+			return err
+		}
+
+		// TO: add import
+		type importsWrap struct {
+			Imports []*pkg.GenImport
+		}
+		var (
+			_imports []*pkg.GenImport
+		)
+
+		for _, imp := range c.imports {
+			_imports = append(_imports, imp)
+		}
+
+		pkg.DebugF("[generate] will add imports: %v", _imports)
+		tmpl = template.Must(template.New("imports").Parse(TmplImport))
+		if err := tmpl.Execute(buf, &importsWrap{_imports}); err != nil {
+			return err
 		}
 	}
 
-	// TO: add import
-	type importsWrap struct {
-		Imports []*pkg.GenImport
-	}
-	var (
-		_imports []*pkg.GenImport
-	)
-
-	for _, imp := range c.imports {
-		_imports = append(_imports, imp)
+	// TO: add struct type decl
+	tmpl := template.Must(template.New("struct").Parse(TmplStruct))
+	if err := tmpl.Execute(buf, genStruct); err != nil {
+		return err
 	}
 
-	pkg.DebugF("will add imports: %v", _imports)
-	tmpl := template.Must(template.New("imports").Parse(TmplImport))
-	tmpl.Execute(c.w, &importsWrap{_imports})
-
-	// TO: add struct
-	tmpl = template.Must(template.New("struct").Parse(TmplStruct))
-	tmpl.Execute(c.w, genStruct)
-
-	// TO: add conv func
+	// TO: add convert func
 	tmpl = template.Must(template.New("method").Parse(TmplMethod))
-	tmpl.Execute(c.w, genStruct)
+	if err := tmpl.Execute(buf, genStruct); err != nil {
+		return err
+	}
 
-	// format.Source()
+	formated, err := format.Source(buf.Bytes())
+	pkg.DebugF("formatted: %s", formated)
+	_, err = c.w.Write(formated)
 
-	return nil
+	return err
 }
 
 func (c *config) processExpr(expr ast.Expr) string {
@@ -216,22 +254,29 @@ func (c *config) processExpr(expr ast.Expr) string {
 
 	switch t := expr.(type) {
 	case *ast.SelectorExpr:
-		_pkgName := c.processExpr(t.X)
-		exprStr = _pkgName + "." + t.Sel.Name
-		c.addImport(_pkgName) // auto-add import
-	case *ast.StarExpr:
-		pkg.DebugF("get starExpr: %v", t)
 		exprStr = c.processExpr(t.X)
+		// auto-add import
+		c.addImport(exprStr)
+		exprStr = exprStr + "." + t.Sel.Name
+	case *ast.StarExpr:
+		pkg.DebugF("[processExpr] get ast.StarExpr: %v", t)
+		exprStr = "*" + c.processExpr(t.X)
 	case *ast.Ident:
-		pkg.DebugF("get ast.Ident: %v", t)
-		exprStr = t.Name
-		// TODO: add self Import
-		// c.addImport("")
+		pkg.DebugF("[processExpr] get ast.Ident: %v", t)
+		exprStr = c.selfPkgExpr(t.Name)
 	default:
-		pkg.DebugF("get expr: %v", t)
+		pkg.DebugF("[processExpr] get expr: %v", t)
 	}
 
 	return exprStr
+}
+
+func (c *config) selfPkgExpr(typName string) string {
+	if _, ok := c.inPkg.Types[typName]; ok {
+		c.addImport(c.inPkg.Name)
+		return c.inPkg.Name + "." + typName
+	}
+	return typName
 }
 
 func (c *config) addImport(pkgName string) {
@@ -247,7 +292,6 @@ func (c *config) addImport(pkgName string) {
 			break
 		}
 	}
-
 }
 
 func processFieldTag(fieldName string) string {

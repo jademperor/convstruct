@@ -1,6 +1,7 @@
 package pkg
 
 import (
+	"errors"
 	"go/ast"
 	"go/parser"
 	"go/token"
@@ -17,10 +18,18 @@ func ParsePkg(pkgPath string, filenames []string) (*Package, error) {
 		return nil, err
 	}
 
+	if len(pkgs) > 1 {
+		return nil, errors.New("package depth must be equal to 1")
+	}
+
 	// load all types
 	allTyps := make(map[string]*TypeSpec)
 	oriImports := make([]*ast.ImportSpec, 0)
-	for _, pkg := range pkgs {
+	var pkgName string
+	for k, pkg := range pkgs {
+		// pkgName = pkg.Name
+		pkgName = k
+		DebugF("[ParsePkg] range package: %s", k)
 		for _, file := range pkg.Files {
 			oriImports = append(oriImports, file.Imports...)
 
@@ -36,11 +45,16 @@ func ParsePkg(pkgPath string, filenames []string) (*Package, error) {
 		allImports[idx] = ParseImportSpec(v)
 	}
 
+	// allImports = append(allImports, &GenImport{
+	// 	Name: pkgName,
+	// 	Path: pkgName,
+	// })
+
 	return &Package{
 		Imports: allImports,
 		Types:   allTyps,
-		// Name: TODO:
-		// Path: TODO:
+		Name:    pkgName,
+		Path:    pkgName,
 	}, nil
 }
 
@@ -53,8 +67,8 @@ func ParseFile(filename string) (*Package, error) {
 		return nil, err
 	}
 
-	obj := file.Scope.Lookup("package")
-	DebugF("find package: %v", obj)
+	// obj := file.Scope.Lookup("package")
+	// DebugF("[ParseFile] find package: %v", obj)
 
 	// load all types
 	allTyps := make(map[string]*TypeSpec)
@@ -62,7 +76,8 @@ func ParseFile(filename string) (*Package, error) {
 	for k, typ := range typs {
 		allTyps[k] = typ
 	}
-	// all imports
+
+	// load all imports
 	oriImports := make([]*ast.ImportSpec, 0)
 	oriImports = append(oriImports, file.Imports...)
 	allImports := make([]*GenImport, len(oriImports))
@@ -73,8 +88,8 @@ func ParseFile(filename string) (*Package, error) {
 	return &Package{
 		Imports: allImports,
 		Types:   allTyps,
-		// Name: TODO:
-		// Path: TODO:
+		// Name: "TODO",
+		// Path: "TODO",
 	}, nil
 }
 
@@ -92,6 +107,8 @@ func ParseImportSpec(spec *ast.ImportSpec) *GenImport {
 		sl := strings.Split(path, "/")
 		name = sl[len(sl)-1]
 		name = strings.Trim(name, `"`)
+	} else {
+		name = spec.Name.Name
 	}
 
 	return &GenImport{

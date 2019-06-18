@@ -20,9 +20,10 @@ type GenStruct struct {
 
 // GenField .
 type GenField struct {
-	Name string
-	Expr string
-	Tag  string
+	IsStar bool
+	Name   string
+	Expr   string
+	Tag    string
 }
 
 // GenImport .

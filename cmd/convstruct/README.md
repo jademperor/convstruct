@@ -2,13 +2,31 @@
 a tool to generate a struct and a convert method from a struct.
 
 ## Todos:
-* [ ] parse struct and source pkg
-* [ ] generate struct and load `func`
-* [ ] add imports automatic
-* [ ] support source pkg structs
+* [x] parse struct and source pkg
+* [x] generate struct and load `func`
+* [x] add imports automatic
+* [x] support source pkg structs
+* [ ] auto import source pkg
 
 
-### source
+## Cli commands
+
+```sh
+➜  go-tools git:(master) ✗ ./bin/convstruct -h
+Usage of ./bin/convstruct:
+  -debug
+        open debug mode
+  -in string
+        Filename to be parsed
+  -out string
+        Filename to keep result
+  -outPkgName string
+        Pkg name to output, only will be used when output file is not exist
+  -structName string
+        StructName to be parsed
+```
+
+## source
 ```go
 package testdata
 

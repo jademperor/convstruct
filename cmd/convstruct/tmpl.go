@@ -11,8 +11,7 @@ package {{.PkgName}}
 // TmplImport is a template of `convstruct`
 const TmplImport = `
 import (
-	{{range $idx, $import := .Imports}}
-	{{$import.Name}} {{$import.Path}}
+	{{range $idx, $import := .Imports}}{{$import.Name}} {{$import.Path}}
 	{{end}}
 )
 `
@@ -22,8 +21,7 @@ const TmplMethod = `
 // Load{{.Name}}FromModel func to load data from model
 func Load{{.Name}}FromModel(m *{{.FromPkg.Name}}.{{.Name}}) *{{.Name}} {
 	return &{{.Name}} {
-		{{range $index, $field := .Fields}}
-			{{$field.Name}}: m.{{$field.Name}},
+		{{range $index, $field := .Fields}}{{$field.Name}}: m.{{$field.Name}},
 		{{end}}
 	}
 }
@@ -33,8 +31,7 @@ func Load{{.Name}}FromModel(m *{{.FromPkg.Name}}.{{.Name}}) *{{.Name}} {
 const TmplStruct = `
 // {{.Name}} description here
 type {{.Name}} struct {
-	{{range $index, $field := .Fields}}
-		{{$field.Name}} {{$field.Expr}} {{$field.Tag}} 
+	{{range $index, $field := .Fields}}{{$field.Name}} {{$field.Expr}} {{$field.Tag}} 
 	{{end}}
 }
 `

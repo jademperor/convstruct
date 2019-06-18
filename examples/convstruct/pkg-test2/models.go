@@ -1,4 +1,4 @@
-package testdata2
+package test2
 
 // SubModel .
 type SubModel struct {

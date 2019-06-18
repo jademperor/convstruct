@@ -1,9 +1,9 @@
-package testdata
+package test1
 
 import (
 	"time"
 
-	"github.com/jademperor/go-tools/convstruct/testdata2"
+	test2 "github.com/jademperor/go-tools/examples/convstruct/pkg-test2"
 	"github.com/jinzhu/gorm"
 )
 
@@ -13,8 +13,8 @@ type CustomModel struct {
 	Name        string
 	Age         int
 	Birthday    time.Time
-	SubModel    testdata2.SubModel
-	SubModelPtr *testdata2.SubModel
+	SubModel    test2.SubModel
+	SubModelPtr *test2.SubModel
 	Int         SelfInt
 	M           SelfModel
 }

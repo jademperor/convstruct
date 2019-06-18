@@ -8,4 +8,9 @@ build-class100:
 	go build -o bin/class100 ./cmd/class100
 
 test-convstruct: build-convstruct
-	./bin/convstruct -in ./convstruct/testdata -structName CustomModel -out ./out.go -outPkgName tools
+	./bin/convstruct \
+	-in ./examples/convstruct/pkg-test1 \
+	-structName CustomModel \
+	-out ./examples/convstruct/pkg-out/out.go  \
+	-outPkgName out \
+	-debug=true 

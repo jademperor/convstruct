@@ -3,13 +3,13 @@ package testdata
 import (
 	"time"
 
-	"github.com/jademperor/go-tools/convstruct/testdata2"
+	"github.com/jademperor/go-tools/pkg/testdata2"
 	"github.com/jinzhu/gorm"
 )
 
 // CustomModel .
 type CustomModel struct {
-	gorm.Model
+	Model       gorm.Model
 	Name        string
 	Age         int
 	Birthday    time.Time

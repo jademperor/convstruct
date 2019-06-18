@@ -1,103 +1,259 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
-	"io/ioutil"
+	"go/ast"
+	"io"
 	"log"
-	"path/filepath"
-	"strings"
+	"os"
+	"text/template"
 
-	"github.com/jademperor/common/pkg/utils"
-	"github.com/jademperor/go-tools/convstruct"
+	"github.com/iancoleman/strcase"
+	"github.com/jademperor/go-tools/pkg"
+	"github.com/yeqown/infrastructure/pkg/fs"
 )
 
-var (
-	offsetFlag = flag.String("offset", "", "file and byte offset of identifier to be renamed, e.g. 'file.go:#123'.  For use by editors.")
-	fromFlag   = flag.String("from", "", "identifier to be renamed; see -help for formats")
-	toFlag     = flag.String("to", "", "new name for identifier")
-	helpFlag   = flag.Bool("help", false, "show usage message")
+/*
+ 1. 使用模版来生成
+ 2. Append到文件中
+ 2.1 如果不存在文件则创建且自动import
+ 2.2 如果存在则注释原有的结构体，并自动更新import
+ 3. 对于任意类型来说，如果该类型没有selector 那么则默认是被解析的模型的类型
+*/
 
-	filenames utils.StringArray
-
-	debug = flag.Bool("debug", false, "debug mode, if open this will output info")
-	dir   = flag.String("dir", ".", "model directory from where")
-	// generate cfg
-	generateFilename     = flag.String("generateFilename", "types.go", "generate file name will be use this, default is (types.go)")
-	generateDir          = flag.String("generateDir", ".", "generate file will be saved here, default is (current dir)")
-	generatePkgName      = flag.String("generatePkgName", "types", "generate package name, default is (types)")
-	generateStructSuffix = flag.String("generateStructSuffix", "", "replace model struct name suffix, like: (UserSuffix => User)")
-	// model cfg
-	modelImportPath   = flag.String("modelImportPath", "", "model package path, cannot be empty, like (my-server/models)")
-	modelStructSuffix = flag.String("modelStructSuffix", "Model", "specified in which Model name style can be generate")
-)
-
-// go run tool.main.go -dir=./convstruct/testdata -filename=type_model.go -generatePkgName=testdata -modelImportPath -generateDir=./convstruct/testdata
 func main() {
-	flag.Var(&filenames, "filename", "specified filename those you want to generate, if no filename be set, will parse all files under ($dir)")
+	var (
+		flagIn         = flag.String("in", "", "Filename to be parsed")
+		flagStructName = flag.String("structName", "", "StructName to be parsed")
+		flagOut        = flag.String("out", "", "Filename to keep result")
+		flagPkgName    = flag.String("outPkgName", "", "Pkg name to output, only will be used when output file is not exist")
+	)
+
 	flag.Parse()
 
-	exportDir, _ := filepath.Abs(*generateDir)
-	*dir, _ = filepath.Abs(*dir)
-	if *debug {
-		log.Println("fromDir:", *dir)
-		log.Println("generateFilename:", *generateFilename)
-		log.Println("exportDir:", exportDir)
+	c := &config{
+		inputPkgDir:      *flagIn,
+		outputFile:       *flagOut,
+		targetStructName: *flagStructName,
+		outPkgName:       *flagPkgName,
+
+		imports: make(map[string]*pkg.GenImport),
 	}
 
-	// set custom funcs
-	// convstruct.SetCustomGenTagFunc(CustomGenerateTagFunc)
-	// convstruct.SetCustomParseTagFunc(CustomParseTagFunc)
-
-	if len(filenames) == 0 {
-		files, _ := ioutil.ReadDir(*dir)
-		for _, file := range files {
-			if file.IsDir() || !strings.HasSuffix(file.Name(), ".go") {
-				continue
-			}
-			filenames = append(filenames, file.Name())
-		}
+	if err := c.parse(); err != nil {
+		panic(err)
 	}
+	defer c.w.Close()
 
-	cfg := &convstruct.UsageCfg{
-		ExportDir:          exportDir,
-		ExportFilename:     *generateFilename,
-		ExportPkgName:      *generatePkgName,
-		ExportStructSuffix: *generateStructSuffix,
-		ModelImportPath:    *modelImportPath,
-		StructSuffix:       *modelStructSuffix,
-		Debug:              *debug,
-		Filenames:          filenames,
-		Dir:                *dir,
-	}
-
-	if *debug {
-		log.Println("following filenames will be parsed", filenames)
-	}
-
-	if err := convstruct.ParseAndGenerate(cfg); err != nil {
+	genStruct, err := c.process()
+	if err != nil {
 		panic(err)
 	}
 
-	println("done!")
+	if err := c.generate(genStruct); err != nil {
+		panic(err)
+	}
 }
 
-// CustomParseTagFunc to custom implment yourself parseTagFunc
-// @param (gorm:"colunm:name")
-// return ("name")
-func CustomParseTagFunc(s string) string {
-	log.Println("calling  CustomParseTagFunc", s)
+// config .
+type config struct {
+	inputPkgDir      string
+	outputFile       string
+	outPkgName       string
+	targetStructName string
 
-	s = strings.Replace(s, `"`, "", -1)
-	splited := strings.Split(s, ":")
-	return splited[len(splited)-1]
+	flagOutputFileBeGenerated bool
+	imports                   map[string]*pkg.GenImport
+	inPkg                     *pkg.Package
+	outPkg                    *pkg.Package
+	w                         io.WriteCloser
 }
 
-// CustomGenerateTagFunc to implment yourself generateTagFunc
-// @param name fieldName (Age, Name, Year, CreateTime)
-// @param typ fieldType (string, int64, time.Time)
-// @param tag (CustomParseTagFunc) return value, default is gorm tag
-// return (json:"name")
-func CustomGenerateTagFunc(name, typ, tag string) string {
-	return fmt.Sprintf("json:\"%s\"", tag)
+func (c *config) valid() bool {
+	return true
+}
+
+func (c *config) parse() (err error) {
+	if !c.valid() {
+		return errors.New("invalid config")
+	}
+
+	filenames := fs.ListFiles("./testdata", fs.IgnoreDirFilter())
+	if c.inPkg, err = pkg.ParsePkg(c.inputPkgDir, filenames); err != nil {
+		return err
+	}
+
+	if _, err := os.Stat(c.outputFile); os.IsNotExist(err) {
+		// generate file
+		if c.w, err = os.Create(c.outputFile); err != nil {
+			return err
+		}
+		c.flagOutputFileBeGenerated = true
+	} else {
+		if c.outPkg, err = pkg.ParseFile(c.outputFile); err != nil {
+			return err
+		}
+		if c.w, err = os.Open(c.outputFile); err != nil {
+			return err
+		}
+		c.flagOutputFileBeGenerated = false
+	}
+
+	return nil
+}
+
+func (c *config) process() (*genConvStruct, error) {
+	tarStruct := c.selectStruct()
+	if tarStruct == nil {
+		return nil, errors.New("Unable to find the struct: " + c.targetStructName)
+	}
+
+	genStruct := &genConvStruct{
+		GenStruct: &pkg.GenStruct{
+			Name:   c.targetStructName,
+			Doc:    "this is Doc for test",
+			Fields: make([]*pkg.GenField, 0),
+		},
+		FromPkg: &pkg.GenImport{
+			Name: c.inPkg.Name,
+			Path: c.inPkg.Path,
+		},
+	}
+
+	for _, field := range tarStruct.Fields.List {
+		genStruct.Fields = append(genStruct.Fields, c.processField(field))
+	}
+
+	return genStruct, nil
+}
+
+func (c *config) selectStruct() *ast.StructType {
+	// var encStruct *ast.StructType
+	for _, typ := range c.inPkg.Types {
+		if typ.Name == c.targetStructName && typ.IsStruct {
+			// encStruct =
+			return typ.Expr.(*ast.StructType)
+		}
+	}
+
+	return nil
+}
+
+func (c *config) processField(f *ast.Field) *pkg.GenField {
+	genField := &pkg.GenField{}
+
+	fieldName := ""
+	if len(f.Names) != 0 {
+		fieldName = f.Names[0].Name
+	}
+
+	// anonymous field
+	if f.Names == nil {
+		ident, ok := f.Type.(*ast.Ident)
+		if !ok {
+			pkg.DebugF("[DEBUG] could not convert Type(%v) to ast.Ident", f.Type)
+		}
+
+		fieldName = ident.Name
+	}
+	genField.Name = fieldName
+	genField.Expr = c.processExpr(f.Type)
+	genField.Tag = quote(processFieldTag(fieldName))
+
+	return genField
+}
+
+func (c *config) generate(genStruct *genConvStruct) error {
+	if c.flagOutputFileBeGenerated {
+		// true: 新的文件
+		tmpl := template.Must(
+			template.New("header").Parse(TmplHeader))
+
+		type genPkgHeader struct {
+			PkgName string
+		}
+
+		if err := tmpl.Execute(c.w, genPkgHeader{PkgName: c.outPkgName}); err != nil {
+			log.Fatal(err)
+		}
+	}
+
+	// TO: add import
+	type importsWrap struct {
+		Imports []*pkg.GenImport
+	}
+	var (
+		_imports []*pkg.GenImport
+	)
+
+	for _, imp := range c.imports {
+		_imports = append(_imports, imp)
+	}
+
+	pkg.DebugF("will add imports: %v", _imports)
+	tmpl := template.Must(template.New("imports").Parse(TmplImport))
+	tmpl.Execute(c.w, &importsWrap{_imports})
+
+	// TO: add struct
+	tmpl = template.Must(template.New("struct").Parse(TmplStruct))
+	tmpl.Execute(c.w, genStruct)
+
+	// TO: add conv func
+	tmpl = template.Must(template.New("method").Parse(TmplMethod))
+	tmpl.Execute(c.w, genStruct)
+
+	// format.Source()
+
+	return nil
+}
+
+func (c *config) processExpr(expr ast.Expr) string {
+	var (
+		exprStr string
+	)
+
+	switch t := expr.(type) {
+	case *ast.SelectorExpr:
+		_pkgName := c.processExpr(t.X)
+		exprStr = _pkgName + "." + t.Sel.Name
+		c.addImport(_pkgName) // auto-add import
+	case *ast.StarExpr:
+		pkg.DebugF("get starExpr: %v", t)
+		exprStr = c.processExpr(t.X)
+	case *ast.Ident:
+		pkg.DebugF("get ast.Ident: %v", t)
+		exprStr = t.Name
+		// TODO: add self Import
+		// c.addImport("")
+	default:
+		pkg.DebugF("get expr: %v", t)
+	}
+
+	return exprStr
+}
+
+func (c *config) addImport(pkgName string) {
+	pkg.DebugF("[addImport] want find pkg: %s", pkgName)
+
+	for _, imp := range c.inPkg.Imports {
+		pkg.DebugF("[addImport] compare pkgName: %s with %s", imp.Name, pkgName)
+		if imp.Name == pkgName {
+			c.imports[pkgName] = &pkg.GenImport{
+				Name: pkgName,
+				Path: imp.Path,
+			}
+			break
+		}
+	}
+
+}
+
+func processFieldTag(fieldName string) string {
+	return fmt.Sprintf(`json:"%s,omitempty"`, strcase.ToSnake(fieldName))
+}
+
+func quote(tag string) string {
+	return "`" + tag + "`"
 }

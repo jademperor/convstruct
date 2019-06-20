@@ -247,6 +247,11 @@ func (c *config) generate(genStruct *genConvStruct) error {
 	return err
 }
 
+// parseExpr to parse ast.Expr into string
+// contains:
+// 	NormalExpr (string, int, etc.)
+//	StarExpr (*string, *Type)
+//
 func (c *config) processExpr(expr ast.Expr) string {
 	var (
 		exprStr string
@@ -271,6 +276,8 @@ func (c *config) processExpr(expr ast.Expr) string {
 	return exprStr
 }
 
+// selfPkgExpr judge the expr is self package's type, then return full type name
+// expr = pkg.Expr
 func (c *config) selfPkgExpr(typName string) string {
 	if _, ok := c.inPkg.Types[typName]; ok {
 		c.addImport(c.inPkg.Name)
@@ -279,6 +286,7 @@ func (c *config) selfPkgExpr(typName string) string {
 	return typName
 }
 
+// addImport if the type needs a third-lib or std-lib support
 func (c *config) addImport(pkgName string) {
 	pkg.DebugF("[addImport] want find pkg: %s", pkgName)
 
